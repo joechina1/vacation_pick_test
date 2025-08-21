@@ -1,15 +1,16 @@
-# Vacation Picker - Full
+# Vacation Picker — Monthly Calendar
 
-## Features
-- Enforces 24 days, 6 picks, max 2 summer picks (Jun 21 - Sept 3)
-- Shows per-detective summary
-- Add picks with date ranges
+Month-by-month calendar with unique colors per detective, delete buttons, and rule checks.
 
-## How to run
-1. Open `index.html` in a browser.
-2. Or deploy to GitHub Pages by uploading all files to a repo and enabling Pages.
+**Rules enforced**
+- 24 days per detective
+- Max 6 picks per detective
+- Max 2 summer picks (June 21 – Sept 3)
+- Max 1 detective off per day
 
-## Files
-- index.html
-- style.css
-- app.jsx
+**How to use**
+1. Open `index.html` locally, or upload all files to a GitHub repo and enable GitHub Pages.
+2. Choose a detective, set start/end dates, click **Add**.
+3. Calendar fills dates with that detective’s color.
+4. Use **Delete** next to any pick to remove it.
+5. Data is saved in `localStorage` automatically.
