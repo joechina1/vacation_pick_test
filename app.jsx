@@ -27,13 +27,34 @@ function getDatesInRange(start, end) {
   return dates;
 }
 
+// Modal component
+function Modal({ open, onClose, children }) {
+  if (!open) return null;
+  return (
+    <div style={{
+      position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+      background: 'rgba(0,0,0,0.25)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10,
+    }}>
+      <div style={{
+        background: '#fff', borderRadius: 8, padding: 24, minWidth: 320, position: 'relative'
+      }}>
+        <button
+          onClick={onClose}
+          style={{ position: 'absolute', right: 10, top: 10, background: 'none', border: 'none', fontSize: 22, cursor: 'pointer' }}
+          aria-label="Close"
+        >×</button>
+        {children}
+      </div>
+    </div>
+  );
+}
+
 // Calendar for a given month and year
-function Calendar({ picksByDate, detectiveColors }) {
+function Calendar({ picksByDate, detectiveColors, onDateClick }) {
   const today = new Date();
   const [month, setMonth] = useState(today.getMonth());
   const [year, setYear] = useState(today.getFullYear());
 
-  // Get days to display for the calendar grid (including empty slots for alignment)
   function getCalendarGrid(year, month) {
     const firstDay = new Date(year, month, 1);
     const lastDay = new Date(year, month + 1, 0);
@@ -82,7 +103,7 @@ function Calendar({ picksByDate, detectiveColors }) {
                   const key = date.toISOString().slice(0,10);
                   const detectives = picksByDate[key] || [];
                   cell = (
-                    <div className="calendar-cell">
+                    <div className="calendar-cell" onClick={()=>detectives.length && onDateClick(key)}>
                       <div className="calendar-date">{date.getDate()}</div>
                       <div className="calendar-picks">
                         {detectives.map((det,i) =>
@@ -107,12 +128,15 @@ function Calendar({ picksByDate, detectiveColors }) {
           ))}
         </tbody>
       </table>
+      <div style={{fontSize: 12, color: "#888"}}>Click a date with picks to view/delete</div>
     </div>
   );
 }
 
 function App(){
-  const[selected,setSel]=useState(null),[picks,setP]=useState({}),[sDate,setS]=useState(""),[eDate,setE]=useState("");
+  const [selected,setSel]=useState(null),[picks,setP]=useState({}),[sDate,setS]=useState(""),[eDate,setE]=useState("");
+  const [calendarModalDate, setCalendarModalDate] = useState(null);
+
   // Summary per detective
   const summary=useMemo(()=>{const s={};for(const d of DETECTIVES){const pk=picks[d]||[];const used=pk.reduce((a,p)=>a+p.days,0);const summer=pk.filter(p=>p.summer).length;
   s[d]={picks:pk,used,remain:MAX_DAYS-used,total:pk.length,summer};}return s;},[picks]);
@@ -130,6 +154,20 @@ function App(){
     }
     return map;
   }, [picks]);
+  // Map: ISO date string -> [{ detective, pickIdx, pick }]
+  const picksByDateDetail = useMemo(() => {
+    const map = {};
+    for(const [det, pkArr] of Object.entries(picks)) {
+      pkArr.forEach((pick, idx) => {
+        getDatesInRange(pick.start, pick.end).forEach(date => {
+          const key = date.toISOString().slice(0,10);
+          if (!map[key]) map[key] = [];
+          map[key].push({ detective: det, pickIdx: idx, pick });
+        });
+      });
+    }
+    return map;
+  }, [picks]);
 
   function addPick(){
     if(!selected||!sDate||!eDate)return alert("Select det+dates");
@@ -142,6 +180,17 @@ function App(){
     setP(prev=>({...prev,[selected]:[...(prev[selected]||[]),{start:s,end:e,days,summer}]}));
     setS("");setE("");
   }
+
+  // Delete a pick for a detective by index
+  function deletePick(detective, idx) {
+    setP(prev => ({
+      ...prev,
+      [detective]: prev[detective].filter((_,i)=>i!==idx)
+    }));
+  }
+
+  // For modal: get picks on a date
+  const modalPicks = calendarModalDate && picksByDateDetail[calendarModalDate];
 
   return <div className='app-shell'>
     <div className='header'><h1>Vacation Picker</h1></div>
@@ -172,6 +221,13 @@ function App(){
               <span style={{ background: DETECTIVE_COLORS[n], color: "#222", padding: "2px 6px", borderRadius: 4 }}>{n}</span>
               <span>{formatDate(p.start)}→{formatDate(p.end)} ({p.days}d)</span>
               {p.summer&&<span className='tag summer'>Summer</span>}
+              <button
+                className="delete-btn"
+                title="Delete this pick"
+                onClick={()=>deletePick(n,i)}
+                style={{
+                  marginLeft: 8, border: "none", background: "none", cursor: "pointer", fontSize: 15, color: "#b22"
+                }}>🗑️</button>
             </div>
           ))}
         </div>
@@ -199,18 +255,47 @@ function App(){
           })}</tbody>
         </table>
       </div>
-      <Calendar picksByDate={picksByDate} detectiveColors={DETECTIVE_COLORS} />
+      <Calendar picksByDate={picksByDate} detectiveColors={DETECTIVE_COLORS} onDateClick={setCalendarModalDate} />
     </div>
+    <Modal open={!!calendarModalDate} onClose={()=>setCalendarModalDate(null)}>
+      <h2>Picks on {calendarModalDate}</h2>
+      {modalPicks && modalPicks.length ? (
+        <ul style={{paddingLeft: 0, listStyle: "none"}}>
+          {modalPicks.map(({detective, pickIdx, pick}, i) => (
+            <li key={i} style={{marginBottom: 6, display: "flex", alignItems: "center"}}>
+              <span style={{
+                background: DETECTIVE_COLORS[detective], color: "#222",
+                padding: "2px 6px", borderRadius: 4, marginRight: 8
+              }}>{detective}</span>
+              <span style={{marginRight: 8}}>
+                {formatDate(pick.start)}→{formatDate(pick.end)} ({pick.days}d)
+              </span>
+              {pick.summer&&<span className='tag summer' style={{marginRight: 8}}>Summer</span>}
+              <button
+                className="delete-btn"
+                title="Delete this pick"
+                onClick={() => { deletePick(detective, pickIdx); setCalendarModalDate(null); }}
+                style={{
+                  marginLeft: 8, border: "none", background: "none", cursor: "pointer", fontSize: 15, color: "#b22"
+                }}>🗑️</button>
+            </li>
+          ))}
+        </ul>
+      ) : <div>No picks for this date.</div>}
+    </Modal>
     <style>{`
       .card, .calendar-card { margin: 1em; padding: 1em; border-radius: 8px; background: #f8f8f8; box-shadow: 0 1px 6px #eee }
       .detective-btn { margin: 2px; border: none; border-radius: 4px; padding: 6px 10px; cursor: pointer; }
       .detective-btn.active { outline: 2px solid #333; }
       .calendar-table { width: 100%; border-collapse: collapse; }
       .calendar-table th, .calendar-table td { border: 1px solid #e0e0e0; width: 14%; min-width: 36px; height: 36px; text-align: left; vertical-align: top; }
-      .calendar-cell { min-height: 32px; position: relative; }
+      .calendar-cell { min-height: 32px; position: relative; cursor: pointer; }
       .calendar-date { font-size: 12px; color: #888; }
       .calendar-picks { margin-top: 2px; }
       .calendar-dot { display: inline-block; width: 15px; height: 15px; border-radius: 50%; vertical-align: middle; }
+      .pick-item { display: flex; align-items: center; gap: 6px; margin-bottom: 2px; }
+      .tag.summer { background: #ffe082; color: #333; border-radius: 3px; padding: 1px 5px; font-size: 11px; margin-left: 6px; }
+      .delete-btn:hover { color: #f00; }
     `}</style>
   </div>;
 }
