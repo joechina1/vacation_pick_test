@@ -1,303 +1,476 @@
 /* global React, ReactDOM */
-const { useState, useMemo } = React;
-const DETECTIVES=["Patrick Tristram","William Luikart","Alan Moreno","Nkosi Henry","Brendan Combs","John Nardella"];
-const DETECTIVE_COLORS = {
-  "Patrick Tristram": "#e57373",
-  "William Luikart": "#64b5f6",
-  "Alan Moreno": "#81c784",
-  "Nkosi Henry": "#ffd54f",
-  "Brendan Combs": "#ba68c8",
-  "John Nardella": "#ff8a65"
+const { useState, useMemo, useEffect } = React;
+
+// ---- Initial Data ----
+const INITIAL_DETECTIVES = [
+  "Patrick Tristram",
+  "William Luikart",
+  "Alan Moreno",
+  "Nkosi Henry",
+  "Brendan Combs",
+  "John Nardella",
+];
+
+// ---- Default Config ----
+const DEFAULT_CONFIG = {
+  maxDaysPerDetective: 24,
+  maxPicksPerDetective: 6,
+  summerStart: { month: 6, day: 21 }, // 1-based for UX, converted in code
+  summerEnd: { month: 9, day: 3 },
+  summerPicksCap: 2,
+  maxOffPerDay: 1,
+  roundMode: true, // enforce seniority order; advance after each pick
+  blackoutRanges: [
+    // Example: { start: "2025-12-24", end: "2025-12-26" }
+  ],
 };
-const MAX_DAYS=24,MAX_PICKS=6;
 
-function isDateInSummer(d){const y=d.getFullYear();return d>=new Date(y,5,21)&&d<=new Date(y,8,3);}
-function rangesOverlapSummer(s,e){let c=new Date(s);while(c<=e){if(isDateInSummer(c))return true;c.setDate(c.getDate()+1);}return false;}
-function daysBetweenInclusive(a,b){return Math.floor((b-a)/(1000*60*60*24))+1;}
-function formatDate(d){return d.toLocaleDateString();}
-
-// Utility to get all days in a range
-function getDatesInRange(start, end) {
+// ---- Helpers ----
+function fmt(d) {
+  return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+}
+function parseISO(s) {
+  const d = new Date(s);
+  if (Number.isNaN(d.getTime())) return null;
+  return d;
+}
+function daysBetweenInclusive(a, b) {
+  const A = new Date(a.getFullYear(), a.getMonth(), a.getDate());
+  const B = new Date(b.getFullYear(), b.getMonth(), b.getDate());
+  const ms = 24*60*60*1000;
+  return Math.floor((B - A)/ms) + 1;
+}
+function eachDateInclusive(a, b) {
   const dates = [];
-  let current = new Date(start);
-  while (current <= end) {
-    dates.push(new Date(current));
-    current.setDate(current.getDate() + 1);
+  const cur = new Date(a.getFullYear(), a.getMonth(), a.getDate());
+  const end = new Date(b.getFullYear(), b.getMonth(), b.getDate());
+  while (cur <= end) {
+    dates.push(new Date(cur));
+    cur.setDate(cur.getDate() + 1);
   }
   return dates;
 }
-
-// Modal component
-function Modal({ open, onClose, children }) {
-  if (!open) return null;
-  return (
-    <div style={{
-      position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-      background: 'rgba(0,0,0,0.25)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10,
-    }}>
-      <div style={{
-        background: '#fff', borderRadius: 8, padding: 24, minWidth: 320, position: 'relative'
-      }}>
-        <button
-          onClick={onClose}
-          style={{ position: 'absolute', right: 10, top: 10, background: 'none', border: 'none', fontSize: 22, cursor: 'pointer' }}
-          aria-label="Close"
-        >×</button>
-        {children}
-      </div>
-    </div>
-  );
+function isSummer(d, config) {
+  const y = d.getFullYear();
+  const start = new Date(y, config.summerStart.month - 1, config.summerStart.day);
+  const end = new Date(y, config.summerEnd.month - 1, config.summerEnd.day);
+  return d >= start && d <= end;
 }
-
-// Calendar for a given month and year
-function Calendar({ picksByDate, detectiveColors, onDateClick }) {
-  const today = new Date();
-  const [month, setMonth] = useState(today.getMonth());
-  const [year, setYear] = useState(today.getFullYear());
-
-  function getCalendarGrid(year, month) {
-    const firstDay = new Date(year, month, 1);
-    const lastDay = new Date(year, month + 1, 0);
-    const daysInMonth = lastDay.getDate();
-    const startDayOfWeek = firstDay.getDay();
-    const grid = [];
-    // Fill leading blanks
-    for(let i=0; i<startDayOfWeek; ++i) grid.push(null);
-    // Fill days
-    for(let d=1; d<=daysInMonth; ++d) grid.push(new Date(year, month, d));
-    // Fill trailing blanks
-    while(grid.length % 7 !== 0) grid.push(null);
-    return grid;
-  }
-
-  const grid = getCalendarGrid(year, month);
-
-  function prevMonth() {
-    if (month === 0) { setMonth(11); setYear(y => y-1);}
-    else setMonth(m => m-1);
-  }
-  function nextMonth() {
-    if (month === 11) { setMonth(0); setYear(y => y+1);}
-    else setMonth(m => m+1);
-  }
-
-  return (
-    <div className="calendar-card card">
-      <h2>
-        <button onClick={prevMonth}>&lt;</button>
-        {" "}{new Date(year, month).toLocaleString('default', { month: 'long', year: 'numeric' })}{" "}
-        <button onClick={nextMonth}>&gt;</button>
-      </h2>
-      <table className="calendar-table">
-        <thead>
-          <tr>
-            {["Sun","Mon","Tue","Wed","Thu","Fri","Sat"].map(d=><th key={d}>{d}</th>)}
-          </tr>
-        </thead>
-        <tbody>
-          {Array.from({length: grid.length/7}).map((_, row) => (
-            <tr key={row}>
-              {grid.slice(row*7, row*7+7).map((date, col) => {
-                let cell = null;
-                if (date) {
-                  const key = date.toISOString().slice(0,10);
-                  const detectives = picksByDate[key] || [];
-                  cell = (
-                    <div className="calendar-cell" onClick={()=>detectives.length && onDateClick(key)}>
-                      <div className="calendar-date">{date.getDate()}</div>
-                      <div className="calendar-picks">
-                        {detectives.map((det,i) =>
-                          <span
-                            key={det}
-                            className="calendar-dot"
-                            style={{
-                              background: detectiveColors[det] || '#bbb',
-                              border: "1px solid #aaa",
-                              marginRight: 2
-                            }}
-                            title={det}
-                          ></span>
-                        )}
-                      </div>
-                    </div>
-                  );
-                }
-                return <td key={col} className="calendar-td">{cell}</td>;
-              })}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      <div style={{fontSize: 12, color: "#888"}}>Click a date with picks to view/delete</div>
-    </div>
-  );
+function rangeHitsSummer(a, b, config) {
+  return eachDateInclusive(a,b).some(d => isSummer(d, config));
 }
+function rangeHitsBlackout(a, b, config) {
+  for (const r of config.blackoutRanges) {
+    const s = parseISO(r.start);
+    const e = parseISO(r.end);
+    if (!s || !e) continue;
+    const overlap = !(e < a || b < s);
+    if (overlap) return true;
+  }
+  return false;
+}
+function dateKey(d) { return d.toISOString().slice(0,10); }
 
-function App(){
-  const [selected,setSel]=useState(null),[picks,setP]=useState({}),[sDate,setS]=useState(""),[eDate,setE]=useState("");
-  const [calendarModalDate, setCalendarModalDate] = useState(null);
+// ---- Persistence ----
+const STORE_KEY = "vacation-picker-full-state";
+function saveState(state) { localStorage.setItem(STORE_KEY, JSON.stringify(state)); }
+function loadState() {
+  try {
+    const s = JSON.parse(localStorage.getItem(STORE_KEY));
+    if (s) return s;
+  } catch {}
+  return null;
+}
+function clearState() { localStorage.removeItem(STORE_KEY); }
 
-  // Summary per detective
-  const summary=useMemo(()=>{const s={};for(const d of DETECTIVES){const pk=picks[d]||[];const used=pk.reduce((a,p)=>a+p.days,0);const summer=pk.filter(p=>p.summer).length;
-  s[d]={picks:pk,used,remain:MAX_DAYS-used,total:pk.length,summer};}return s;},[picks]);
-  // Map of ISO date string -> [detective(s)]
-  const picksByDate = useMemo(() => {
-    const map = {};
-    for(const [det, pkArr] of Object.entries(picks)) {
-      for(const pick of pkArr) {
-        getDatesInRange(pick.start, pick.end).forEach(date => {
-          const key = date.toISOString().slice(0,10);
-          if (!map[key]) map[key] = [];
-          if (!map[key].includes(det)) map[key].push(det);
-        });
+// ---- App ----
+function App() {
+  const restored = loadState();
+
+  const [detectives, setDetectives] = useState(restored?.detectives || INITIAL_DETECTIVES);
+  const [config, setConfig] = useState(restored?.config || DEFAULT_CONFIG);
+  const [picksByDet, setPicksByDet] = useState(restored?.picksByDet || {});
+  const [schedule, setSchedule] = useState(restored?.schedule || {}); // { 'YYYY-MM-DD': [names] }
+  const [roundIndex, setRoundIndex] = useState(restored?.roundIndex || 0);
+
+  const [selected, setSelected] = useState(null);
+  const [startISO, setStartISO] = useState("");
+  const [endISO, setEndISO] = useState("");
+
+  // Persist
+  useEffect(() => {
+    saveState({ detectives, config, picksByDet, schedule, roundIndex });
+  }, [detectives, config, picksByDet, schedule, roundIndex]);
+
+  // Summaries per detective
+  const detSummary = useMemo(() => {
+    const out = {};
+    for (const name of detectives) {
+      const picks = picksByDet[name] || [];
+      const usedDays = picks.reduce((n, p) => n + p.days, 0);
+      const summerPicks = picks.filter(p => p.summer).length;
+      out[name] = {
+        picks,
+        usedDays,
+        remainingDays: Math.max(0, config.maxDaysPerDetective - usedDays),
+        totalPicks: picks.length,
+        summerPicks,
+      };
+    }
+    return out;
+  }, [picksByDet, detectives, config.maxDaysPerDetective]);
+
+  // Current detective in round mode
+  const currentDetective = config.roundMode ? detectives[roundIndex % detectives.length] : null;
+
+  // --- Validation ---
+  function validatePick(name, start, end) {
+    const s = detSummary[name];
+
+    // Dates valid
+    if (!start || !end) return "Choose start and end dates.";
+    if (end < start) return "End date cannot be before start date.";
+
+    // Blackout
+    if (rangeHitsBlackout(start, end, config)) {
+      return "This range overlaps a blackout period.";
+    }
+
+    // Days count
+    const days = daysBetweenInclusive(start, end);
+    if (s.totalPicks + 1 > config.maxPicksPerDetective) {
+      return `Limit reached: max ${config.maxPicksPerDetective} picks.`;
+    }
+    if (s.usedDays + days > config.maxDaysPerDetective) {
+      return `Adding this pick exceeds ${config.maxDaysPerDetective} days.`;
+    }
+
+    // Per-day capacity
+    for (const d of eachDateInclusive(start,end)) {
+      const key = dateKey(d);
+      const list = schedule[key] || [];
+      const already = list.includes(name);
+      if (already) return "Detective already off on at least one date in this range.";
+      if (list.length >= config.maxOffPerDay) {
+        return `Capacity reached on ${fmt(d)} (max ${config.maxOffPerDay} off).`;
       }
     }
-    return map;
-  }, [picks]);
-  // Map: ISO date string -> [{ detective, pickIdx, pick }]
-  const picksByDateDetail = useMemo(() => {
-    const map = {};
-    for(const [det, pkArr] of Object.entries(picks)) {
-      pkArr.forEach((pick, idx) => {
-        getDatesInRange(pick.start, pick.end).forEach(date => {
-          const key = date.toISOString().slice(0,10);
-          if (!map[key]) map[key] = [];
-          map[key].push({ detective: det, pickIdx: idx, pick });
-        });
-      });
+
+    // Summer cap
+    const wouldBeSummer = rangeHitsSummer(start, end, config);
+    if (wouldBeSummer && s.summerPicks + 1 > config.summerPicksCap) {
+      return `Summer picks cap reached (max ${config.summerPicksCap}).`;
     }
-    return map;
-  }, [picks]);
 
-  function addPick(){
-    if(!selected||!sDate||!eDate)return alert("Select det+dates");
-    const s=new Date(sDate),e=new Date(eDate);
-    if(e<s)return alert("End before start");
-    const days=daysBetweenInclusive(s,e),summer=rangesOverlapSummer(s,e);
-    const det=summary[selected];
-    if(det.total+1>MAX_PICKS)return alert("Max picks");
-    if(det.used+days>MAX_DAYS)return alert("Too many days");
-    setP(prev=>({...prev,[selected]:[...(prev[selected]||[]),{start:s,end:e,days,summer}]}));
-    setS("");setE("");
+    // Round mode enforcement
+    if (config.roundMode && currentDetective && currentDetective !== name) {
+      return `Round mode: It is currently ${currentDetective}'s turn.`;
+    }
+
+    return null;
   }
 
-  // Delete a pick for a detective by index
-  function deletePick(detective, idx) {
-    setP(prev => ({
-      ...prev,
-      [detective]: prev[detective].filter((_,i)=>i!==idx)
+  // --- Actions ---
+  function addPick() {
+    const name = selected || (config.roundMode ? currentDetective : null);
+    if (!name) { alert("Select a detective (or use Round Mode)."); return; }
+    const start = parseISO(startISO), end = parseISO(endISO);
+    const err = validatePick(name, start, end);
+    if (err) { alert(err); return; }
+
+    const days = daysBetweenInclusive(start, end);
+    const summer = rangeHitsSummer(start, end, config);
+
+    setPicksByDet(prev => {
+      const arr = prev[name] || [];
+      return { ...prev, [name]: [...arr, { start: startISO, end: endISO, days, summer }] };
+    });
+
+    setSchedule(prev => {
+      const clone = { ...prev };
+      for (const d of eachDateInclusive(start, end)) {
+        const k = dateKey(d);
+        clone[k] = [...(clone[k] || []), name];
+      }
+      return clone;
+    });
+
+    // Advance round
+    if (config.roundMode) {
+      setRoundIndex(i => (i + 1) % detectives.length);
+    }
+
+    setStartISO("");
+    setEndISO("");
+  }
+
+  function deletePick(name, idx) {
+    const pick = (picksByDet[name] || [])[idx];
+    if (!pick) return;
+    const start = parseISO(pick.start), end = parseISO(pick.end);
+
+    setPicksByDet(prev => {
+      const arr = (prev[name] || []).slice();
+      arr.splice(idx, 1);
+      return { ...prev, [name]: arr };
+    });
+
+    setSchedule(prev => {
+      const clone = { ...prev };
+      for (const d of eachDateInclusive(start, end)) {
+        const k = dateKey(d);
+        clone[k] = (clone[k] || []).filter(n => n !== name);
+        if (clone[k].length === 0) delete clone[k];
+      }
+      return clone;
+    });
+  }
+
+  function resetAll() {
+    if (!confirm("Reset all data? This cannot be undone.")) return;
+    setPicksByDet({});
+    setSchedule({});
+    setRoundIndex(0);
+    clearState();
+  }
+
+  function exportJSON() {
+    const data = { detectives, config, picksByDet, schedule, roundIndex, exportedAt: new Date().toISOString() };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "vacation-picker-export.json";
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function importJSON(file) {
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const data = JSON.parse(reader.result);
+        if (!data) throw new Error("Invalid file");
+        setDetectives(data.detectives || detectives);
+        setConfig({ ...DEFAULT_CONFIG, ...(data.config || {}) });
+        setPicksByDet(data.picksByDet || {});
+        setSchedule(data.schedule || {});
+        setRoundIndex(data.roundIndex || 0);
+      } catch (e) {
+        alert("Invalid JSON file.");
+      }
+    };
+    reader.readAsText(file);
+  }
+
+  // --- Derived schedule table (sorted by date) ---
+  const scheduleRows = useMemo(() => {
+    const entries = Object.entries(schedule).sort((a,b) => a[0].localeCompare(b[0]));
+    return entries.map(([iso, names]) => ({
+      iso, names, date: fmt(parseISO(iso + "T12:00:00Z")) // ensure date-only parse
     }));
+  }, [schedule]);
+
+  // --- Admin controls (config) ---
+  function addBlackoutRange(sIso, eIso) {
+    if (!sIso || !eIso) return;
+    const s = parseISO(sIso), e = parseISO(eIso);
+    if (e < s) return alert("Blackout end before start.");
+    setConfig(c => ({ ...c, blackoutRanges: [...c.blackoutRanges, { start: sIso, end: eIso }] }));
+  }
+  function removeBlackoutIndex(i) {
+    setConfig(c => ({ ...c, blackoutRanges: c.blackoutRanges.filter((_, idx) => idx !== i) }));
   }
 
-  // For modal: get picks on a date
-  const modalPicks = calendarModalDate && picksByDateDetail[calendarModalDate];
+  return (
+    <div className="app">
+      <div className="header">
+        <h1>Detective Vacation Picker — Full</h1>
+        <div className="flex">
+          <span className="badge">Max {config.maxDaysPerDetective} days</span>
+          <span className="badge">Max {config.maxPicksPerDetective} picks</span>
+          <span className="badge">Summer cap {config.summerPicksCap} (Jun {config.summerStart.day}–Sep {config.summerEnd.day})</span>
+          <span className="badge">Max off/day {config.maxOffPerDay}</span>
+          {config.roundMode && <span className="badge">Round: {detectives[roundIndex % detectives.length]}</span>}
+        </div>
+      </div>
 
-  return <div className='app-shell'>
-    <div className='header'><h1>Vacation Picker</h1></div>
-    <div className='grid'>
-      <div className='card'>
-        <h2>Detectives</h2>
-        {DETECTIVES.map(d=>
-          <button
-            key={d}
-            className={'detective-btn '+(selected===d?'active':'')}
-            onClick={()=>setSel(d)}
-            style={{ background: DETECTIVE_COLORS[d], color: "#222", fontWeight: selected===d ? "bold" : "normal" }}
-          >
-            {d}
-          </button>
-        )}
-      </div>
-      <div className='card'>
-        <h2>Make Pick</h2>
-        <div className='controls'>
-          <input type='date' value={sDate} onChange={e=>setS(e.target.value)}/>
-          <input type='date' value={eDate} onChange={e=>setE(e.target.value)}/>
-          <button className='primary' onClick={addPick}>Add</button>
-        </div>
-        <div className='picks-list'>
-          {Object.entries(picks).flatMap(([n,pk])=>pk.map((p,i)=>
-            <div key={i} className='pick-item'>
-              <span style={{ background: DETECTIVE_COLORS[n], color: "#222", padding: "2px 6px", borderRadius: 4 }}>{n}</span>
-              <span>{formatDate(p.start)}→{formatDate(p.end)} ({p.days}d)</span>
-              {p.summer&&<span className='tag summer'>Summer</span>}
-              <button
-                className="delete-btn"
-                title="Delete this pick"
-                onClick={()=>deletePick(n,i)}
-                style={{
-                  marginLeft: 8, border: "none", background: "none", cursor: "pointer", fontSize: 15, color: "#b22"
-                }}>🗑️</button>
+      <div className="grid">
+        {/* Left: Detectives */}
+        <div className="card">
+          <h2>Detectives (Seniority)</h2>
+          {detectives.map((name) => (
+            <button
+              key={name}
+              className={`detective-btn ${selected === name ? "active" : ""}`}
+              onClick={() => setSelected(name)}
+              disabled={config.roundMode && currentDetective && currentDetective !== name}
+              title={config.roundMode && currentDetective !== name ? `Round mode: waiting for ${currentDetective}` : ""}
+            >
+              {name}
+            </button>
+          ))}
+
+          <div style={{ marginTop: 10 }} className="kv">
+            <div className="key">Round Mode</div>
+            <div className="val">
+              <button className="ghost" onClick={() => setConfig(c => ({ ...c, roundMode: !c.roundMode }))}>
+                {config.roundMode ? "On" : "Off"}
+              </button>
             </div>
-          ))}
+
+            {config.roundMode && (
+              <>
+                <div className="key">Current Turn</div>
+                <div className="val">
+                  <div className="flex">
+                    <button className="ghost" onClick={() => setRoundIndex(i => (i - 1 + detectives.length) % detectives.length)}>◀</button>
+                    <span style={{ padding: "0 6px", fontWeight: 700 }}>{detectives[roundIndex % detectives.length]}</span>
+                    <button className="ghost" onClick={() => setRoundIndex(i => (i + 1) % detectives.length)}>▶</button>
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+
+        {/* Middle: Make a Pick */}
+        <div className="card">
+          <h2>Make a Pick</h2>
+          <div className="controls">
+            <div>
+              <label>Start</label>
+              <input type="date" value={startISO} onChange={e => setStartISO(e.target.value)} />
+            </div>
+            <div>
+              <label>End</label>
+              <input type="date" value={endISO} onChange={e => setEndISO(e.target.value)} />
+            </div>
+            <button className="primary" onClick={addPick}>Add Pick</button>
+          </div>
+
+          {selected && !config.roundMode && (
+            <div style={{ marginTop: 8 }} className="badge">Active: {selected}</div>
+          )}
+          {config.roundMode && (
+            <div style={{ marginTop: 8 }} className="badge">Round Turn: {detectives[roundIndex % detectives.length]}</div>
+          )}
+
+          <div className="picks-list" style={{ marginTop: 10 }}>
+            {Object.entries(picksByDet).length === 0 && <div className="empty">No picks yet.</div>}
+            {Object.entries(picksByDet).flatMap(([name, picks]) =>
+              picks.map((p, i) => (
+                <div key={`${name}-${i}`} className="pick-item">
+                  <div>{name}</div>
+                  <div>{fmt(parseISO(p.start))} → {fmt(parseISO(p.end))} ({p.days} day{p.days!==1?"s":""}) {p.summer && <span className="tag summer">Summer</span>}</div>
+                  <div><button className="ghost" onClick={() => deletePick(name, i)}>Delete</button></div>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+
+        {/* Right: Summary & Admin */}
+        <div className="card">
+          <h2>Summary</h2>
+          <table className="table">
+            <thead>
+              <tr><th>Detective</th><th>Used</th><th>Remain</th><th>Picks</th><th>Summer</th></tr>
+            </thead>
+            <tbody>
+              {detectives.map(name => {
+                const s = detSummary[name] || { usedDays: 0, remainingDays: config.maxDaysPerDetective, totalPicks: 0, summerPicks: 0 };
+                const remainClass = s.remainingDays === 0 ? "bad" : (s.remainingDays <= 4 ? "notice" : "ok");
+                const summerClass = s.summerPicks > config.summerPicksCap ? "notice" : "";
+                return (
+                  <tr key={name}>
+                    <td>{name}</td>
+                    <td>{s.usedDays}</td>
+                    <td className={remainClass}>{s.remainingDays}</td>
+                    <td>{s.totalPicks}/{config.maxPicksPerDetective}</td>
+                    <td className={summerClass}>{s.summerPicks}/{config.summerPicksCap}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+
+          <h2 style={{ marginTop: 14 }}>Per‑Day Schedule</h2>
+          <table className="table">
+            <thead><tr><th>Date</th><th>Off</th></tr></thead>
+            <tbody>
+              {scheduleRows.length === 0 && <tr><td colSpan="2" className="empty">No days selected.</td></tr>}
+              {scheduleRows.map(r => (
+                <tr key={r.iso}>
+                  <td>{r.iso}</td>
+                  <td>{r.names.join(", ")}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+
+          <h2 style={{ marginTop: 14 }}>Admin</h2>
+          <div className="kv">
+            <div className="key">Max off per day</div>
+            <div className="val">
+              <div className="flex">
+                <input type="number" min="1" value={config.maxOffPerDay} onChange={e => setConfig(c => ({ ...c, maxOffPerDay: Math.max(1, Number(e.target.value)||1) }))} />
+                <button className="ghost" onClick={() => setConfig(c => ({ ...c, maxOffPerDay: 1 }))}>Reset</button>
+              </div>
+            </div>
+
+            <div className="key">Summer window</div>
+            <div className="val">
+              <div className="flex">
+                <span className="badge">Start: {config.summerStart.month}/{config.summerStart.day}</span>
+                <span className="badge">End: {config.summerEnd.month}/{config.summerEnd.day}</span>
+              </div>
+            </div>
+
+            <div className="key">Summer picks cap</div>
+            <div className="val">
+              <div className="flex">
+                <input type="number" min="0" value={config.summerPicksCap} onChange={e => setConfig(c => ({ ...c, summerPicksCap: Math.max(0, Number(e.target.value)||0) }))} />
+                <button className="ghost" onClick={() => setConfig(c => ({ ...c, summerPicksCap: 2 }))}>Reset</button>
+              </div>
+            </div>
+
+            <div className="key">Blackouts</div>
+            <div className="val">
+              {config.blackoutRanges.length === 0 && <div className="empty" style={{ marginBottom: 6 }}>None</div>}
+              {config.blackoutRanges.map((r,i) => (
+                <div key={i} className="flex">
+                  <span className="tag blackout">{r.start} → {r.end}</span>
+                  <button className="ghost" onClick={() => removeBlackoutIndex(i)}>Remove</button>
+                </div>
+              ))}
+              <div className="flex" style={{ marginTop: 6 }}>
+                <input type="date" id="boS" />
+                <input type="date" id="boE" />
+                <button className="ghost" onClick={() => {
+                  const s = document.getElementById("boS").value;
+                  const e = document.getElementById("boE").value;
+                  addBlackoutRange(s, e);
+                }}>Add</button>
+              </div>
+            </div>
+
+            <div className="key">Data</div>
+            <div className="val">
+              <div className="flex">
+                <button className="ghost" onClick={exportJSON}>Export JSON</button>
+                <label className="ghost" style={{ border: "1px solid rgba(255,255,255,0.12)", padding: "8px 10px", borderRadius: "10px", cursor: "pointer" }}>
+                  Import JSON
+                  <input type="file" accept="application/json" style={{ display: "none" }} onChange={e => e.target.files[0] && importJSON(e.target.files[0])} />
+                </label>
+                <button className="ghost" onClick={resetAll}>Reset All</button>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
-      <div className='card summary'>
-        <h2>Summary</h2>
-        <table>
-          <thead><tr><th>Det</th><th>Used</th><th>Remain</th><th>Picks</th><th>Summer</th></tr></thead>
-          <tbody>{DETECTIVES.map(d=>{
-            const s=summary[d];
-            return <tr key={d}>
-              <td>
-                <span style={{
-                  background: DETECTIVE_COLORS[d],
-                  color: "#222",
-                  padding: "2px 6px",
-                  borderRadius: 4
-                }}>{d}</span>
-              </td>
-              <td>{s.used}</td>
-              <td>{s.remain}</td>
-              <td>{s.total}</td>
-              <td>{s.summer}/2</td>
-            </tr>;
-          })}</tbody>
-        </table>
-      </div>
-      <Calendar picksByDate={picksByDate} detectiveColors={DETECTIVE_COLORS} onDateClick={setCalendarModalDate} />
     </div>
-    <Modal open={!!calendarModalDate} onClose={()=>setCalendarModalDate(null)}>
-      <h2>Picks on {calendarModalDate}</h2>
-      {modalPicks && modalPicks.length ? (
-        <ul style={{paddingLeft: 0, listStyle: "none"}}>
-          {modalPicks.map(({detective, pickIdx, pick}, i) => (
-            <li key={i} style={{marginBottom: 6, display: "flex", alignItems: "center"}}>
-              <span style={{
-                background: DETECTIVE_COLORS[detective], color: "#222",
-                padding: "2px 6px", borderRadius: 4, marginRight: 8
-              }}>{detective}</span>
-              <span style={{marginRight: 8}}>
-                {formatDate(pick.start)}→{formatDate(pick.end)} ({pick.days}d)
-              </span>
-              {pick.summer&&<span className='tag summer' style={{marginRight: 8}}>Summer</span>}
-              <button
-                className="delete-btn"
-                title="Delete this pick"
-                onClick={() => { deletePick(detective, pickIdx); setCalendarModalDate(null); }}
-                style={{
-                  marginLeft: 8, border: "none", background: "none", cursor: "pointer", fontSize: 15, color: "#b22"
-                }}>🗑️</button>
-            </li>
-          ))}
-        </ul>
-      ) : <div>No picks for this date.</div>}
-    </Modal>
-    <style>{`
-      .card, .calendar-card { margin: 1em; padding: 1em; border-radius: 8px; background: #f8f8f8; box-shadow: 0 1px 6px #eee }
-      .detective-btn { margin: 2px; border: none; border-radius: 4px; padding: 6px 10px; cursor: pointer; }
-      .detective-btn.active { outline: 2px solid #333; }
-      .calendar-table { width: 100%; border-collapse: collapse; }
-      .calendar-table th, .calendar-table td { border: 1px solid #e0e0e0; width: 14%; min-width: 36px; height: 36px; text-align: left; vertical-align: top; }
-      .calendar-cell { min-height: 32px; position: relative; cursor: pointer; }
-      .calendar-date { font-size: 12px; color: #888; }
-      .calendar-picks { margin-top: 2px; }
-      .calendar-dot { display: inline-block; width: 15px; height: 15px; border-radius: 50%; vertical-align: middle; }
-      .pick-item { display: flex; align-items: center; gap: 6px; margin-bottom: 2px; }
-      .tag.summer { background: #ffe082; color: #333; border-radius: 3px; padding: 1px 5px; font-size: 11px; margin-left: 6px; }
-      .delete-btn:hover { color: #f00; }
-    `}</style>
-  </div>;
+  );
 }
 
-ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
