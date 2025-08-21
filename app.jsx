@@ -16,7 +16,7 @@ const MAX_PICKS = 6;
 const SUMMER_START = { m: 6, d: 21 }; // 1-based
 const SUMMER_END = { m: 9, d: 3 };
 const MAX_SUMMER_PICKS = 2;
-const MAX_OFF_PER_DAY = 1;
+const MAX_OFF_PER_DAY = 2;
 
 const STORE_KEY = "vacation-picker-monthly-state";
 
